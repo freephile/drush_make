@@ -9,7 +9,7 @@ function drush_make_drush_command() {
   $items['make'] = array(
     'description' => 'Turns a makefile into a working drupal install.',
     'callback' => 'drush_make',
-    'callback arguments' => array(),
+    'bootstrap' => DRUSH_BOOTSTRAP_DRUSH,
   );
  
   return $items;
@@ -25,16 +25,22 @@ function drush_make_drush_help($section) {
   }
 }
 
+/**
+ * Drush callback; make based on the makefile.
+ */
 function drush_make($makefile) {
-  // Set default settings
+  // Set empty arrays for the settings, in case they aren't filled in.
   $projects = array();
-  $copy_settings = FALSE;
+  $extra = array();
+  // Include the file itself.
   include_once $makefile;
-  list($major) = explode('.', $projects['drupal']['version']);
+  // Add default settings for the extra.
   $extra += array(
     'copy_settings' => FALSE,
     'tar' => FALSE,
   );
+  // Find a major version.
+  list($major) = explode('.', $projects['drupal']['version']);
   $major .= '.x';
   foreach ($projects as $project => $info) {
     if (is_string($info) && is_numeric($project)) {
@@ -121,10 +127,7 @@ function drush_make($makefile) {
     if (!drush_shell_exec("wget " . $info['release']['file'])) {
       drush_shell_exec("curl -O " . $info['release']['file']);
     }
-    if (file_exists($filename)) {
-      drush_verbose("Downloading " . $filename . " was successful.");
-    }
-    else {
+    if (!file_exists($filename)) {
       drush_error("Unable to download $filename to $path from " . $info['release']['file']);
       continue;
     }

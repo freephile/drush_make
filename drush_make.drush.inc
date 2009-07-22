@@ -1,0 +1,178 @@
+<?php
+define('DRUSH_MAKE_UPDATE_DEFAULT_URL', 'http://updates.drupal.org/release-history');
+define('DRUSH_MAKE_VERSION_BEST', 'best');
+
+/**
+ * Implementation of hook_drush_command().
+ */
+function drush_make_drush_command() {
+  $items['make'] = array(
+    'description' => 'Turns a makefile into a working drupal install.',
+    'callback' => 'drush_make',
+    'callback arguments' => array(),
+  );
+ 
+  return $items;
+}
+
+/**
+ * Implementation of hook_drush_help().
+ */
+function drush_make_drush_help($section) {
+  switch ($section) {
+    case 'drush:make':
+      return dt("@TODO: Print information on the format of the makefile here.");
+  }
+}
+
+function drush_make($makefile) {
+  // Set default settings
+  $projects = array();
+  $copy_settings = FALSE;
+  include_once $makefile;
+  list($major) = explode('.', $projects['drupal']['version']);
+  $extra += array(
+    'copy_settings' => FALSE,
+    'tar' => FALSE,
+  );
+  $major .= '.x';
+  foreach ($projects as $project => $info) {
+    if (is_string($info) && is_numeric($project)) {
+      $project = $info;
+      $info = array();
+    }
+    $info += array(
+      'version' => DRUSH_MAKE_VERSION_BEST,
+      'location' => DRUSH_MAKE_UPDATE_DEFAULT_URL,
+      'subdir' => '',
+      'directory_name' => '',
+    );
+    $info['version'] = (string) $info['version'];
+    $formatted_projects[$project] = $project;
+    // First, get the release history.
+    @$xml = simplexml_load_file($info['location'] . '/' . $project . '/' . $major);
+    if (!$xml) {
+      drush_error(dt("Could not retrieve version information for @project.", array('@project' => $project)));
+      continue;
+    }
+    // Determine the project type.
+    $term_map = array('module' => 'Modules', 'theme' => 'Themes', 'drupal' => 'Drupal project');
+    $flip_term_map = array_flip($term_map);
+    foreach ($xml->terms->term as $term) {
+      if (in_array((string) $term->value, $term_map)) {
+        $type = $flip_term_map[(string)$term->value];
+        break;
+      }
+    }
+    $releases = array();
+    foreach ($xml->releases->release as $release) {
+      $version = (string) $release->version_major;
+      if ((string) $release->version_patch === '0' || (string) $release->version_patch) {
+        $version .= '.' . (string) $release->version_patch;
+      }
+      if ($extra_version = (string) $release->version_extra) {
+        $version .= '-' . $extra_version;
+      }
+      $releases[$version] = array(
+        'file' => (string) $release->download_link,
+        'md5' => (string) $release->mdhash,
+      );
+      foreach (array('major', 'patch', 'extra') as $part) {
+        $releases[$version][$part] = (string) $release->{'version_' . $part};
+      }
+    }
+    if ($info['version'] == DRUSH_MAKE_VERSION_BEST) {
+      // First, find the recommended major.
+      $recommended_major = (string)$xml->recommended_major;
+      $info['version'] = drush_make_find_best_release($recommended_major, $releases);
+    }
+    else {
+      $exploded_version = explode('.', $info['version']);
+      if (count($exploded_version) == 1) {
+        
+      }
+    }
+    $info['release'] = $releases[$info['version']];
+
+    $filename = explode('/', $info['release']['file']);
+    $filename = array_pop($filename);
+    $untar_name = str_replace(array('.tar.gz', '.tgz'), '', $filename);
+    if ($type == 'drupal') {
+      $drupal_filename = $untar_name;
+    }
+    else {
+      drush_op('chdir', $drupal_filename . '/sites/all');
+      if (!is_dir($type . 's')) {
+        drush_op('mkdir', $type . 's');
+      }
+      drush_op('chdir', $type . 's');
+    }
+    if (!empty($info['subdir'])) {
+      $subdir = explode('/', $info['subdir']);
+      foreach ($subdir as $part) {
+        if (!is_dir($part)) {
+          drush_op('mkdir', $part);
+        }
+        drush_op('chdir', $part);
+      }
+    }
+
+    // Download it.
+    if (!drush_shell_exec("wget " . $info['release']['file'])) {
+      drush_shell_exec("curl -O " . $info['release']['file']);
+    }
+    if (file_exists($filename)) {
+      drush_verbose("Downloading " . $filename . " was successful.");
+    }
+    else {
+      drush_error("Unable to download $filename to $path from " . $info['release']['file']);
+      continue;
+    }
+
+    // Check Md5 hash
+    if (md5_file($filename) != $info['release']['md5']) {
+      drush_op('unlink', $filename);
+      drush_error("Error: File $filename is corrupt (wrong md5 checksum).");
+      continue;
+    }
+    drush_shell_exec("gzip -d " . $filename);
+    $filename = substr($filename, 0, strlen($filename) - 3);
+    drush_shell_exec("tar -xf " . $filename);
+    if ($info['directory_name']) {
+      drush_shell_exec('mv '. $untar_name . ' ' . $info['directory_name']);
+      if ($type == 'drupal') {
+        $drupal_filename = $info['directory_name'];
+      }
+    }
+
+    // Remove the tarball
+    drush_op('unlink', $filename);
+    if ($type != 'drupal') {
+      drush_op('chdir', '../../../..');
+    }
+    if (isset($subdir)) {
+      drush_op('chdir', implode('/', array_fill(0, count($subdir), '..')));
+    }
+  }
+  if ($extra['copy_settings']) {
+    drush_shell_exec("cp $drupal_filename/sites/default/default.settings.php $drupal_filename/sites/default/settings.php");
+  }
+  if ($extra['tar']) {
+    // Probably doesn't work on winbloze.
+    drush_shell_exec("tar -czf $drupal_filename.tar.gz $drupal_filename");
+    drush_shell_exec('rm -r ' . $drupal_filename);
+  }
+}
+
+function drush_make_find_best_release($major, $releases) {
+  $best = NULL;
+  $best_release = NULL;
+  foreach ($releases as $release => $release_info) {
+    $version = $release_info['patch'] . $release_info['extra'];
+    if ($release_info['major'] == $major && version_compare($best, $version, '<')) {
+      $best = $version;
+      $best_release = $release;
+    }
+  }
+  return $best_release;
+}

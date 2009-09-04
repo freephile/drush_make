@@ -42,11 +42,14 @@ function drush_make($makefile) {
   // Find a major version.
   list($major) = explode('.', $projects['drupal']['version']);
   $major .= '.x';
+  drush_print(dt('Downloading projects...'));
   foreach ($projects as $project => $info) {
+    // The project can sometimes have no info.
     if (is_string($info) && is_numeric($project)) {
       $project = $info;
       $info = array();
     }
+    // Add default info.
     $info += array(
       'version' => DRUSH_MAKE_VERSION_BEST,
       'location' => DRUSH_MAKE_UPDATE_DEFAULT_URL,
@@ -54,22 +57,23 @@ function drush_make($makefile) {
       'directory_name' => '',
     );
     $info['version'] = (string) $info['version'];
-    $formatted_projects[$project] = $project;
     // First, get the release history.
     @$xml = simplexml_load_file($info['location'] . '/' . $project . '/' . $major);
     if (!$xml) {
-      drush_error(dt("Could not retrieve version information for @project.", array('@project' => $project)));
+      drush_set_error('RELEASE_HISTORY', dt("Could not retrieve version information for @project.", array('@project' => $project)));
       continue;
     }
     // Determine the project type.
-    $term_map = array('module' => 'Modules', 'theme' => 'Themes', 'drupal' => 'Drupal project');
+    $term_map = array('module' => 'Modules', 'theme' => 'Themes', 'drupal' => 'Drupal project', 'translation' => 'Translations');
     $flip_term_map = array_flip($term_map);
     foreach ($xml->terms->term as $term) {
       if (in_array((string) $term->value, $term_map)) {
+        // Get the code-friendly name of the type.
         $type = $flip_term_map[(string)$term->value];
         break;
       }
     }
+    // Make a list of all the releases, as well as some important information about them.
     $releases = array();
     foreach ($xml->releases->release as $release) {
       $version = (string) $release->version_major;
@@ -87,17 +91,21 @@ function drush_make($makefile) {
         $releases[$version][$part] = (string) $release->{'version_' . $part};
       }
     }
+    // If the version isn't specified, we'll choose the best version.
     if ($info['version'] == DRUSH_MAKE_VERSION_BEST) {
       // First, find the recommended major.
       $recommended_major = (string)$xml->recommended_major;
       $info['version'] = drush_make_find_best_release($recommended_major, $releases);
     }
+    // If the version is specified and it's just a branch, the below will catch
+    // it. Otherwise, there's enough info that it doesn't need to be processed.
     else {
       $exploded_version = explode('.', $info['version']);
       if (count($exploded_version) == 1) {
-        
+        $info['version'] = drush_make_find_best_release($exploded_version[0], $releases);
       }
     }
+    // Put the release in the info array.
     $info['release'] = $releases[$info['version']];
 
     $filename = explode('/', $info['release']['file']);
@@ -127,19 +135,33 @@ function drush_make($makefile) {
     if (!drush_shell_exec("wget " . $info['release']['file'])) {
       drush_shell_exec("curl -O " . $info['release']['file']);
     }
-    if (!file_exists($filename)) {
-      drush_error("Unable to download $filename to $path from " . $info['release']['file']);
-      continue;
-    }
 
     // Check Md5 hash
     if (md5_file($filename) != $info['release']['md5']) {
       drush_op('unlink', $filename);
-      drush_error("Error: File $filename is corrupt (wrong md5 checksum).");
+      drush_set_error("MD5_WRONG", "Error: File $filename is corrupt (wrong md5 checksum).");
       continue;
     }
-    drush_shell_exec("gzip -d " . $filename);
-    $filename = substr($filename, 0, strlen($filename) - 3);
+
+    // Retrieve file info from the gzip archive. In particular, we need
+    // to get the original filename so that we can untar it successfully.
+    drush_shell_exec("gzip --list {$filename}");
+    $gzinfo = drush_shell_exec_output();
+    drush_shell_exec("gzip -d {$filename}");
+
+    if (!count($gzinfo)) {
+      drush_error(dt("Could not retrieve package information for @filename.", array('@filename' => $filename)));
+      continue;
+    }
+    $gzinfo = array_pop($gzinfo);
+    $matches = array();
+    preg_match('/[a-zA-Z0-9.\-_,]*.tar/', $gzinfo, $matches);
+    if (!isset($matches[0])) {
+      drush_error(dt("Could not retrieve tar filename from @filename for @project.", array('@project' => $project, '@filename' => $filename)));
+      continue;
+    }
+    $filename = $matches[0];
+
     drush_shell_exec("tar -xf " . $filename);
     if ($info['directory_name']) {
       drush_shell_exec('mv '. $untar_name . ' ' . $info['directory_name']);
@@ -150,11 +172,11 @@ function drush_make($makefile) {
 
     // Remove the tarball
     drush_op('unlink', $filename);
-    if ($type != 'drupal') {
-      drush_op('chdir', '../../../..');
-    }
     if (isset($subdir)) {
       drush_op('chdir', implode('/', array_fill(0, count($subdir), '..')));
+    }
+    if ($type != 'drupal') {
+      drush_op('chdir', '../../../..');
     }
   }
   if ($extra['copy_settings']) {

@@ -72,23 +72,21 @@ function drush_make_get_base_path($destination = '', $reset = FALSE) {
  * Drush callback; make based on the makefile.
  */
 function drush_make($makefile = NULL, $base_path = NULL) {
-  if (!($info = drush_make_get_info($makefile))) {
-    return;
-  }
-
   // Start the build.
   $base_path = drush_make_get_base_path($base_path);
-  drush_make_build($info, $base_path);
+  if ($info = drush_make_get_info($makefile)) {
+    drush_make_build($info, $base_path);
 
-  // Copy settings.php.
-  if (drush_get_option('copy-settings')) {
-    drush_shell_exec("cp {$base_path}/sites/default/default.settings.php {$base_path}/sites/default/settings.php");
-  }
+    // Copy settings.php.
+    if (drush_get_option('copy-settings')) {
+      drush_shell_exec("cp {$base_path}/sites/default/default.settings.php {$base_path}/sites/default/settings.php");
+    }
 
-  // Tarring is enabled.
-  if (drush_get_option('tar')) {
-    drush_shell_exec("tar -czf $base_path.tar.gz $base_path");
-    drush_shell_exec('rm -r ' . $base_path);
+    // Tarring is enabled.
+    if (drush_get_option('tar')) {
+      drush_shell_exec("tar -czf $base_path.tar.gz $base_path");
+      drush_shell_exec('rm -r ' . $base_path);
+    }
   }
 }
 
@@ -155,7 +153,6 @@ function drush_make_project_factory($project, $build_path) {
     'version' => DRUSH_MAKE_VERSION_BEST,
     'location' => DRUSH_MAKE_UPDATE_DEFAULT_URL,
     'subdir' => '',
-    'directory_name' => '',
   );
   if (empty($project['type'])) {
     if (!($data = drush_make_download_data($project))) {

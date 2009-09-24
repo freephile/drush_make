@@ -16,7 +16,6 @@ class DrushMakeProject {
     if (!$this->downloadClass) {
       drush_error(dt('Could not find download type @type', array('@type' => $this->download['type'])));
     }
-    $this->path = $this->generatePath();
   }
 
   /**
@@ -25,12 +24,22 @@ class DrushMakeProject {
   function make() {
     if (empty($this->made)) {
       if ($directory = $this->downloadClass->download()) {
+        $this->path = $this->generatePath();
         $this->fillPath($this->path);
         // Check is the directory is not there, perhaps the module already exits.
         if (!is_dir($this->path .'/'. $directory)) {
           $directory = rtrim($directory, '/');
           $path = $this->move($directory);
           $this->applyPatches($path);
+
+          // If the project itself containes any make file, build them too.
+          $make_files = drush_scan_directory($path, '.make.txt');
+          $build_path = $this->generatePath(FALSE) ."/". $directory;
+          foreach ($make_files as $file) {
+            if ($info = drush_make_get_info($file->filename)) {
+              drush_make_build($info, $this->base_path, $build_path);
+            }
+          }
         }
         else {
           drush_set_error(dt('Directory not empty: '). $directory);
@@ -78,20 +87,23 @@ class DrushMakeProject {
 
   /**
    * Generate the proper path for this project type.
+   *
+   * @param $base_path
+   *   Whether to include the base_path in the generated patch. Defaults to
+   *   true.
    */
-  protected function generatePath() {
-    $path = $this->base_path;
-    // Generate subdirectory paths.
+  protected function generatePath($base = true) {
+    $path = array();
+    if ($base) {
+      $path[] = $this->base_path;
+    }
     if (!empty($this->project_path)) {
-      $path .= '/' . $this->project_path;
+      $path[] = $this->project_path;
     }
     if (!empty($this->subdir)) {
-      $path .= '/' . $this->subdir;
+      $path[] = $this->subdir;
     }
-    if ($this->directory_name) {
-      $this->path .= '/' . $this->directory_name;
-    }
-    return $path;
+    return implode('/', $path);
   }
 
   protected function fillPath($path) {

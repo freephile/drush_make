@@ -4,6 +4,8 @@
 define('DRUSH_MAKE_UPDATE_DEFAULT_URL', 'http://updates.drupal.org/release-history');
 define('DRUSH_MAKE_VERSION_BEST', 'best');
 
+include_once 'drush_make.api.inc';
+
 /**
  * Implementation of hook_drush_command().
  */
@@ -13,10 +15,17 @@ function drush_make_drush_command() {
     'callback' => 'drush_make',
     'bootstrap' => DRUSH_BOOTSTRAP_DRUSH,
     'examples' => array(
-      'drush make foo.make.info' => 'Make the Drupal described in foo.make.info.',
+      'drush make [script] [directory]' => 'Build the Drupal site described in [script] to [directory].',
+      'drush make foo.make bar' => 'Builds foo.make into a Drupal site in the bar/ directory.',
     ),
     'arguments' => array(
-      'path/to/script' => 'The path to the makefile. The path may be absolute or relative to the current working dir.',
+      'script' => 'The path to the makefile. The path may be absolute or relative to the current working dir.',
+      'directory' => 'The optional destination directory for the build. If omitted, the site will be built to the current working dir.',
+    ),
+    'options' => array(
+      '--copy-settings' => 'Copy default.settings.php to settings.php in sites/default upon completion.',
+      '--tar=[file]' => 'Generate an archive of the build at [file].tar.gz instead of to a directory.',
+      '--working-copy' => 'Check out working copies of any projects that specify version control.',
     ),
   );
  
@@ -34,9 +43,126 @@ function drush_make_drush_help($section) {
 }
 
 /**
+ * Establish the destination base_path for this build.
+ */
+function drush_make_get_base_path($destination = '', $reset = FALSE) {
+  static $base_path;
+  if (!isset($base_path) || $reset) {
+    $drupal_root = drush_get_option(array('r', 'root'), drush_locate_root());
+    if (drush_get_option('tar')) {
+      $base_path = drush_get_option('tar');
+    }
+    else if (!empty($destination)) {
+      $base_path = trim($destination, '/');
+    }
+    elseif (!empty($drupal_root) && drush_valid_drupal_root($drupal_root)) {
+      $base_path = $drupal_root;
+    }
+    elseif(drush_confirm(dt("Make new site in the current directory?"))) {
+      $base_path = '.';
+    }
+    else {
+      drush_die(dt("Build aborted."));
+    }
+  }
+  return $base_path;
+}
+
+/**
  * Drush callback; make based on the makefile.
  */
-function drush_make($makefile = NULL) {
+function drush_make($makefile = NULL, $base_path = NULL) {
+  if (!($info = drush_make_get_info($makefile))) {
+    return;
+  }
+
+  drush_print(dt('Getting project information...'));
+  $base_path = drush_make_get_base_path($base_path);
+
+  if (!empty($info['destination'])) {
+    $path = $base_path . '/_drush_make_tmp';
+    drush_op('mkdir', $path);
+    drush_shell_exec('ls');
+    $files = drush_shell_exec_output();
+    foreach ($files as $file) {
+      drush_shell_exec("mv ./{$file} {$path}/{$file}");
+    }
+  }
+
+  // Retrieve project information
+  $projects = array();
+
+  foreach ($info['projects'] as $project => $project_info) {
+    // Cover if there is no project info, it's just a project name.
+    if (is_string($project_info) && is_numeric($project)) {
+      $project = $project_info;
+      $project_info = array();
+    }
+    $project_info += array(
+      'name'      => $project,
+      'core'      => $info['core'],
+      'base_path' => $base_path,
+    );
+
+    $project = $projects[$project_info['name']] = DrushMakeProject::factory($project_info);
+    if ($project->type == 'core') {
+      unset($projects[$project->name]);
+      $core = $project;
+    }
+  }
+  if (!isset($core)) {
+    $core = DrushMakeProject::factory(array(
+      'name' => 'drupal',
+      'core' => $info['core'],
+      'base_path' => $base_path,
+    ));
+  }
+
+  // Ensure no errors occured before starting to build. In particular this will
+  // catch situations where the update xml could not be retrieved.
+  if (drush_get_error()) {
+    drush_die();
+  }
+
+  drush_print(dt('Building projects...'));
+
+  $drupal_root = drush_get_option(array('r', 'root'), drush_locate_root());
+  if (empty($drupal_root) || !drush_valid_drupal_root($drupal_root)) {
+    $core->make();
+  }
+  // Build projects
+  foreach ($projects as $project) {
+    $project->make();
+  }
+
+  // Copy settings.php.
+  if (drush_get_option('copy-settings')) {
+    drush_shell_exec("cp {$base_path}/sites/default/default.settings.php {$base_path}/sites/default/settings.php");
+  }
+
+
+  if (!empty($info['destination'])) {
+    $path = $base_path . '/' . $info['destination'];
+    if (!is_dir($path)) {
+      drush_op('mkdir', $path);
+    }
+    foreach ($files as $file) {
+      drush_shell_exec("mv {$base_path}/_drush_make_tmp/{$file} {$path}/{$file}");
+    }
+    drush_op('rmdir', $base_path . '/_drush_make_tmp');
+  }
+
+  // Tarring is enabled.
+  if (drush_get_option('tar')) {
+    drush_shell_exec("tar -czf $base_path.tar.gz $base_path");
+    drush_shell_exec('rm -r ' . $base_path);
+  }
+}
+
+/**
+ * Retrieve and parse the makefile.
+ */
+function drush_make_get_info($makefile) {
   // Do some error checking.
   if (!isset($makefile)) {
     drush_set_error(dt('Please specify a makefile.'));
@@ -48,236 +174,17 @@ function drush_make($makefile = NULL) {
   }
   elseif (!($info = drush_make_parse_info_file($makefile))) {
     drush_set_error(dt('The specified makefile doesn\'t exist.'));
+    return;
   }
   elseif (empty($info['projects'])) {
     drush_set_error(dt('The specified makefile doesn\'t have any projects.'));
+    return;
   }
   elseif (empty($info['core'])) {
     drush_set_error(dt('The specified makefile doesn\'t have a core version.'));
-  }
-
-  drush_print(dt('Getting project information...'));
-
-  // The final array of projects.
-  $projects = array();
-
-  // As a first pass, get project information..
-  foreach ($info['projects'] as $project => $project_info) {
-    // Cover if there is no project info, it's just a project name.
-    if (is_string($project_info) && is_numeric($project)) {
-      $project = $project_info;
-      $project_info = array();
-    }
-
-    // Add some defaults.
-    $project_info += array(
-      'name' => $project,
-      'version' => DRUSH_MAKE_VERSION_BEST,
-      'location' => DRUSH_MAKE_UPDATE_DEFAULT_URL,
-      'subdir' => '',
-      'directory_name' => '',
-    );
-
-    drush_get_project_info($project_info, $info['core']);
-
-    $projects[] = $project_info;
-  }
-
-  $drupal_filename = drush_make_download_drupal($info);
-
-  drush_print(dt('Downloading projects...'));
-  foreach ($projects as $project) {
-    // Assume we're in a Drupal root at this point.
-    $path = 'sites/all/' . $project['type'] . 's';
-    // If sites/all/[project type] doesn't exist, create it.
-    if (!is_dir($path)) {
-      drush_op('mkdir', $path);
-    }
-
-    if (!empty($project['subdir'])) {
-      foreach (explode('/', $project['subdir']) as $part) {
-        if (!is_dir($part)) {
-          drush_op('mkdir', $part);
-        }
-        $path .= '/' . $part;
-      }
-    }
-
-    if (!$file = drush_make_download_project($project)) {
-      continue;
-    }
-
-    // Get the filename once unzipped.
-    drush_shell_exec('tar -tf ' . $file);
-    list($project_directory) = drush_shell_exec_output();
-    drush_shell_exec('tar -xf ' . $file);
-    drush_op('unlink', $file);
-
-    if ($project['directory_name']) {
-      $path .= '/' . $project['directory_name'];
-    }
-    else {
-      $path .= '/' . trim($project_directory, '/');
-    }
-    drush_shell_exec('mv ' . $project_directory . ' ' .  $path);
-  }
-    
-  if (drush_get_option('copy-settings')) {
-    drush_shell_exec("cp sites/default/default.settings.php sites/default/settings.php");
-  }
-
-  if ($drupal_filename) {
-    // Tarring is enabled.
-    drush_op('chdir', '..');
-    drush_shell_exec("tar -czf $drupal_filename.tar.gz $drupal_filename");
-    drush_shell_exec('rm -r ' . $drupal_filename);
-  }
-}
-
-/**
- * Find the best release for the given major and the set of releases.
- */
-function drush_make_find_best_release($major, $releases) {
-  $best = NULL;
-  $best_release = NULL;
-  foreach ($releases as $release => $release_info) {
-    $version = $release_info['patch'] . $release_info['extra'];
-    if ($release_info['major'] == $major && version_compare($best, $version, '<')) {
-      $best = $version;
-      $best_release = $release;
-    }
-  }
-  return $best_release;
-}
-
-function drush_get_project_info(&$project_info, $core) {
-  // First, get the release history.
-  @$release_history = simplexml_load_file($project_info['location'] . '/' . $project_info['name'] . '/' . $core);
-  if (!$release_history) {
-    drush_set_error(dt("Could not retrieve version information for @project.", array('@project' => $project)));
     return;
   }
-
-  // Determine the project type.
-  $term_map = array('Modules' => 'module', 'Themes' => 'theme');
-  // Iterate through all terms related to this project.
-  foreach ($release_history->terms->term as $term) {
-    // If the term is eather 'Modules' or 'Themes', add it.
-    if (in_array((string) $term->value, array_keys($term_map))) {
-      $project_info['type'] = $term_map[(string)$term->value];
-      break;
-    }
-  }
-
-  // Make an array of releases.
-  $releases = array();
-  foreach ($release_history->releases->release as $release) {
-    $version = (string) $release->version_major;
-    if ((string) $release->version_patch === '0' || (string) $release->version_patch) {
-      $version .= '.' . (string) $release->version_patch;
-    }
-    if ($extra_version = (string) $release->version_extra) {
-      $version .= '-' . $extra_version;
-    }
-    $releases[$version] = array(
-      'file' => (string) $release->download_link,
-      'md5' => (string) $release->mdhash,
-    );
-    foreach (array('major', 'patch', 'extra') as $part) {
-      $releases[$version][$part] = (string) $release->{'version_' . $part};
-    }
-  }
-
-  // Find the best release.
-  if ($project_info['version'] == DRUSH_MAKE_VERSION_BEST) {
-    $recommended_major = (string)$release_history->recommended_major;
-    $project_info['version'] = drush_make_find_best_release($recommended_major, $releases);
-  }
-  else {
-    $exploded_version = explode('.', $project_info['version']);
-    if (count($exploded_version) == 1) {
-      $project_info['version'] = drush_make_find_best_release($exploded_version, $releases);
-    }
-  }
-  $project_info['release'] = $releases[$project_info['version']];
-}
-
-function drush_make_download_project($project) {
-  list($filename) = array_reverse(explode('/', $project['release']['file']));
-  // Download the project.
-  if (!drush_shell_exec("wget " . $project['release']['file'])) {
-    drush_shell_exec("curl -O " . $project['release']['file']);
-  }
-  if (file_exists($filename)) {
-    drush_print("{$project['name']}-{$project['version']} downloaded.");
-  }
-  else {
-    drush_set_error("Unable to download $filename from " . $project['release']['file']);
-    return;
-  }
-
-  // Check Md5 hash.
-  if (md5_file($filename) != $project['release']['md5']) {
-    drush_op('unlink', $filename);
-    drush_set_error("Error: File $filename is corrupt (wrong md5 checksum).");
-    return;
-  }
-
-  // Unzip the file.
-  drush_shell_exec('gzip --list ' . $filename);
-  $gzinfo = drush_shell_exec_output();
-
-  if (!count($gzinfo)) {
-    drush_set_error(dt('Could not retrieve package information for @filename.', array('@filename' => $filename)));
-    return;
-  }
-
-  // Unzip it and then delete the tar file.
-  drush_shell_exec('gzip -d ' . $filename);
-
-  $gzinfo = array_pop($gzinfo);
-  $matches = array();
-  preg_match('/[a-zA-Z0-9.\-_,]*.tar/', $gzinfo, $matches);
-  if (!isset($matches[0])) {
-    drush_set_error(dt('Could not retrieve tar filename from @filename for @project.', array('@project' => $project, '@filename' => $filename)));
-    return;
-  }
-
-  return $matches[0];
-}
-
-function drush_make_download_drupal($info) {
-  $project_info = array(
-    'name' => 'drupal',
-    'version' => DRUSH_MAKE_VERSION_BEST,
-    'location' => DRUSH_MAKE_UPDATE_DEFAULT_URL,
-  );
-  drush_get_project_info($project_info, $info['core']);
-  $file = drush_make_download_project($project_info);
-
-  // Get the filename once unzipped.
-  drush_shell_exec('tar -tf ' . $file);
-  $output = drush_shell_exec_output();
-  drush_shell_exec('tar -xf ' . $file);
-  drush_op('unlink', $file);
-  if ($tar = drush_get_option('tar')) {
-  $file = trim(array_shift($output), '/');
-  drush_shell_exec('mv ' . $file . ' ' . $tar);
-  chdir($tar);
-  return $tar;
-  }
-  else {
-    foreach ($output as $item) {
-      $parts = explode('/', trim($item, '/'));
-      if (count($parts) == 2) {
-        drush_shell_exec('mv ' . $item . ' ' . $parts[1]);
-      }
-      elseif (count($parts) == 1) {
-        $root = $parts[0];
-      }
-    }
-    drush_shell_exec('rm -r ' . $root);
-  }
+  return $info;
 }
 
 /**

@@ -1,4 +1,5 @@
 <?php
+// $Id$
 
 class DrushMakeProject_Profile extends DrushMakeProject {
   var $project_path = 'profiles';

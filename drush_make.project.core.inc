@@ -1,4 +1,5 @@
 <?php
+// $Id$
 
 class DrushMakeProject_Core extends DrushMakeProject {
   public function __construct(&$project) {

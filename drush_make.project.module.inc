@@ -1,4 +1,5 @@
 <?php
+// $Id$
 
 class DrushMakeProject_Module extends DrushMakeProject {
   var $project_path = 'sites/all/modules';

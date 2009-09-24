@@ -76,12 +76,35 @@ function drush_make($makefile = NULL, $base_path = NULL) {
     return;
   }
 
-  drush_print(dt('Getting project information...'));
+  // Start the build.
   $base_path = drush_make_get_base_path($base_path);
+  drush_make_build($info, $base_path);
+
+  // Copy settings.php.
+  if (drush_get_option('copy-settings')) {
+    drush_shell_exec("cp {$base_path}/sites/default/default.settings.php {$base_path}/sites/default/settings.php");
+  }
+
+  // Tarring is enabled.
+  if (drush_get_option('tar')) {
+    drush_shell_exec("tar -czf $base_path.tar.gz $base_path");
+    drush_shell_exec('rm -r ' . $base_path);
+  }
+}
+
+/**
+ * Build a platform based on a make file.
+ *
+ * @param $info
+ *   $info array as returned by drush_make_get_info()
+ *
+ * @param $base_path
+ *   The path where the platform will be assembled
+ */
+function drush_make_build($info, $base_path) {
 
   // Retrieve project information
   $projects = array();
-
   foreach ($info['projects'] as $project => $project_info) {
     // Cover if there is no project info, it's just a project name.
     if (is_string($project_info) && is_numeric($project)) {
@@ -100,40 +123,20 @@ function drush_make($makefile = NULL, $base_path = NULL) {
       $core = $project;
     }
   }
-  if (!isset($core)) {
-    $core = DrushMakeProject::factory(array(
-      'name' => 'drupal',
-      'core' => $info['core'],
-      'base_path' => $base_path,
-    ));
-  }
 
   // Ensure no errors occured before starting to build. In particular this will
   // catch situations where the update xml could not be retrieved.
   if (drush_get_error()) {
-    drush_die();
+    return;
   }
 
-  drush_print(dt('Building projects...'));
-
-  $drupal_root = drush_get_option(array('r', 'root'), drush_locate_root());
-  if (empty($drupal_root) || !drush_valid_drupal_root($drupal_root)) {
+  // Core is a special case, we need to set it up first thing.
+  if (isset($core)) {
     $core->make();
   }
   // Build projects
   foreach ($projects as $project) {
     $project->make();
-  }
-
-  // Copy settings.php.
-  if (drush_get_option('copy-settings')) {
-    drush_shell_exec("cp {$base_path}/sites/default/default.settings.php {$base_path}/sites/default/settings.php");
-  }
-
-  // Tarring is enabled.
-  if (drush_get_option('tar')) {
-    drush_shell_exec("tar -czf $base_path.tar.gz $base_path");
-    drush_shell_exec('rm -r ' . $base_path);
   }
 }
 

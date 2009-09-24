@@ -26,15 +26,18 @@ class DrushMakeProject {
       'subdir' => '',
       'directory_name' => '',
     );
-    if (!$project['type']) {
+    if (empty($project['type'])) {
       if (!($data = self::downloadData($project))) {
         return FALSE;
       }
       $project += $data;
     }
-    include_once 'drush_make.project.' . $project['type'] . '.inc';
-    $class = 'DrushMakeProject_' . $project['type'];
-    return new $class($project);
+    if (!empty($project['type'])) {
+      include_once 'drush_make.project.' . $project['type'] . '.inc';
+      $class = 'DrushMakeProject_' . $project['type'];
+      return new $class($project);
+    }
+    return FALSE;
   }
 
   /**
@@ -91,7 +94,7 @@ class DrushMakeProject {
    */
   protected function move($project_directory) {
     drush_shell_exec("mv {$project_directory} {$this->path}");
-    return $path;
+    return "{$this->path}/{$project_directory}";
   }
 
   /**
@@ -132,7 +135,7 @@ class DrushMakeProject {
     }
 
     // Determine the project type.
-    $term_map = array('Modules' => 'module', 'Themes' => 'theme', 'Drupal project' => 'core', 'Install profiles' => 'profiles');
+    $term_map = array('Modules' => 'module', 'Themes' => 'theme', 'Drupal project' => 'core', 'Installation profiles' => 'profile');
     // Iterate through all terms related to this project.
     foreach ($release_history->terms->term as $term) {
       // If the term is eather 'Modules' or 'Themes', add it.

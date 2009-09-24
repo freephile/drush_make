@@ -45,25 +45,19 @@ function drush_make_drush_help($section) {
 /**
  * Establish the destination base_path for this build.
  */
-function drush_make_get_base_path($destination = '', $reset = FALSE) {
-  static $base_path;
-  if (!isset($base_path) || $reset) {
-    $drupal_root = drush_get_option(array('r', 'root'), drush_locate_root());
-    if (drush_get_option('tar')) {
-      $base_path = drush_get_option('tar');
-    }
-    else if (!empty($destination)) {
-      $base_path = trim($destination, '/');
-    }
-    elseif (!empty($drupal_root) && drush_valid_drupal_root($drupal_root)) {
-      $base_path = $drupal_root;
-    }
-    elseif(drush_confirm(dt("Make new site in the current directory?"))) {
-      $base_path = '.';
-    }
-    else {
-      drush_die(dt("Build aborted."));
-    }
+function drush_make_get_base_path($destination = '') {
+  if (drush_get_option('tar')) {
+    $base_path = drush_get_option('tar');
+  }
+  elseif (!empty($destination)) {
+    $base_path = trim($destination, '/');
+  }
+  elseif(drush_confirm(dt("Make new site in the current directory?"))) {
+    $base_path = '.';
+  }
+  else {
+    drush_print(dt('Build aborted.'));
+    return FALSE;
   }
   return $base_path;
 }
@@ -72,20 +66,40 @@ function drush_make_get_base_path($destination = '', $reset = FALSE) {
  * Drush callback; make based on the makefile.
  */
 function drush_make($makefile = NULL, $base_path = NULL) {
+  $temp_dir = 'tmp'. time();
+  if (file_exists($temp_dir)) {
+    drush_set_error("DRUSH_MAKE_ERROR", dt("Couldn't make temporary directory."));
+    return;
+  }
+
   // Start the build.
-  $base_path = drush_make_get_base_path($base_path);
   if ($info = drush_make_get_info($makefile)) {
-    drush_make_build($info, $base_path);
+    if ($base_path = drush_make_get_base_path($base_path)) {
+      $temp_base = "{$temp_dir}/{$base_path}";
+      drush_make_build($info, $temp_base);
 
-    // Copy settings.php.
-    if (drush_get_option('copy-settings')) {
-      drush_shell_exec("cp {$base_path}/sites/default/default.settings.php {$base_path}/sites/default/settings.php");
-    }
+      // Copy settings.php.
+      if (drush_get_option('copy-settings')) {
+        drush_shell_exec("cp {$temp_base}/sites/default/default.settings.php {$temp_base}/sites/default/settings.php");
+      }
 
-    // Tarring is enabled.
-    if (drush_get_option('tar')) {
-      drush_shell_exec("tar -czf $base_path.tar.gz $base_path");
-      drush_shell_exec('rm -r ' . $base_path);
+      // Tarring is enabled.
+      if (drush_get_option('tar')) {
+        drush_shell_exec("tar -Pcf -  --transform='s,{$temp_base},{$base_path},' {$temp_base} | gzip > {$base_path}.tar.gz");
+      }
+
+      if ($base_path == '.') {
+        drush_shell_exec("mv {$temp_base}/* .");
+        drush_shell_exec("mv {$temp_base}/.* .");
+      }
+      elseif (file_exists($base_path)) {
+        drush_set_error("DRUSH_MAKE_ERROR", dt("Could not move build into place. Directory already exists: ". $base_path));
+        return;
+      }
+      else {
+        drush_shell_exec("mv $temp_base $base_path");
+      }
+      drush_shell_exec("rm -r $temp_dir");
     }
   }
 }

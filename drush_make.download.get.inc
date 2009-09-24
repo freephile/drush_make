@@ -7,6 +7,11 @@ class DrushMakeDownload_Get extends DrushMakeDownload {
   }
 
   protected function unpack($filename) {
+    if (drush_get_context('DRUSH_SIMULATE')) {
+      // Return a fake directory name so our simulation makes more sense.
+      return 'simulated_project';
+    }
+
     $extension = array_pop(explode('.', $filename));
     switch ($extension) {
       case 'gz':
@@ -78,10 +83,11 @@ class DrushMakeDownload_Get extends DrushMakeDownload {
     if (!drush_shell_exec("wget " . $this->project->download['url'])) {
       drush_shell_exec("curl -O " . $this->project->download['url']);
     }
-    if (!file_exists($filename)) {
-      drush_set_error("Unable to download {$filename} from {$this->project->download['url']}.");
+    if (file_exists($filename) || drush_get_context('DRUSH_SIMULATE')) {
+      drush_print("{$this->project->name} downloaded from {$this->project->download['url']}.");
+      return $filename;
     }
-    drush_print("{$this->project->name} downloaded from {$this->project->download['url']}.");
-    return $filename;
+    drush_set_error("Unable to download {$filename} from {$this->project->download['url']}.");
+    return FALSE;
   }
 }

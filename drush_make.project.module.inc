@@ -2,8 +2,8 @@
 // $Id$
 
 class DrushMakeProject_Module extends DrushMakeProject {
-  var $project_path = 'sites/all/modules';
-  public function __construct(&$project) {
+  public function __construct(&$project, $build_path) {
+    $this->project_path = $build_path .'/modules';
     parent::__construct($project);
   }
 }

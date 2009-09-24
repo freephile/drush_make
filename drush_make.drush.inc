@@ -97,11 +97,12 @@ function drush_make($makefile = NULL, $base_path = NULL) {
  *
  * @param $info
  *   $info array as returned by drush_make_get_info()
- *
  * @param $base_path
  *   The path where the platform will be assembled
+ * @param $build_path
+ *   The path where this set of packages be assembled.
  */
-function drush_make_build($info, $base_path) {
+function drush_make_build($info, $base_path, $build_path = 'sites/all') {
 
   // Retrieve project information
   $projects = array();
@@ -111,13 +112,14 @@ function drush_make_build($info, $base_path) {
       $project = $project_info;
       $project_info = array();
     }
+    // Merge the known data onto the project info.
     $project_info += array(
       'name'      => $project,
       'core'      => $info['core'],
       'base_path' => $base_path,
     );
 
-    $project = $projects[$project_info['name']] = DrushMakeProject::factory($project_info);
+    $project = $projects[$project_info['name']] = drush_make_project_factory($project_info, $build_path);
     if ($project->type == 'core') {
       unset($projects[$project->name]);
       $core = $project;
@@ -137,6 +139,64 @@ function drush_make_build($info, $base_path) {
   // Build projects
   foreach ($projects as $project) {
     $project->make();
+  }
+}
+
+/**
+ * Project object factory.
+ *
+ * @param $project
+ *   The project info array.
+ *
+ * @return a DrushMakeProject_TYPE object.
+ */
+function drush_make_project_factory($project, $build_path) {
+  $project += array(
+    'version' => DRUSH_MAKE_VERSION_BEST,
+    'location' => DRUSH_MAKE_UPDATE_DEFAULT_URL,
+    'subdir' => '',
+    'directory_name' => '',
+  );
+  if (empty($project['type'])) {
+    if (!($data = drush_make_download_data($project))) {
+      return FALSE;
+    }
+    $project += $data;
+  }
+  if (!empty($project['type'])) {
+    include_once 'drush_make.project.' . $project['type'] . '.inc';
+    $class = 'DrushMakeProject_' . $project['type'];
+    return new $class($project, $build_path);
+  }
+  return FALSE;
+}
+
+/**
+ * Retrieve and process update xml.
+ *
+ * @param $project
+ *   The project info array.
+ *
+ * @return
+ *   Array of 'release_histroy' and 'type' info that can be added to the
+ *   project info array.
+ */
+function drush_make_download_data($project) {
+  // First, get the release history.
+  @$release_history = simplexml_load_file($project['location'] . '/' . $project['name'] . '/' . $project['core']);
+  if (!$release_history) {
+    drush_set_error(dt("Could not retrieve version information for @project.", array('@project' => $project['name'])));
+    return;
+  }
+
+  // Determine the project type.
+  $term_map = array('Modules' => 'module', 'Themes' => 'theme', 'Drupal project' => 'core', 'Installation profiles' => 'profile');
+  // Iterate through all terms related to this project.
+  foreach ($release_history->terms->term as $term) {
+    // If the term is eather 'Modules' or 'Themes', add it.
+    if (in_array((string) $term->value, array_keys($term_map))) {
+      return array('release_history' => $release_history, 'type' => $term_map[(string)$term->value]);
+    }
   }
 }
 

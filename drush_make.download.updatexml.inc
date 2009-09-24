@@ -55,13 +55,14 @@ class DrushMakeDownload_UpdateXML extends DrushMakeDownload_Get {
     }
 
     // Check Md5 hash.
-    if (md5_file($filename) != $this->release['md5']) {
-      drush_op('unlink', $filename);
-      drush_set_error("Error: File $filename is corrupt (wrong md5 checksum).");
-      return;
+    if (drush_get_context('DRUSH_SIMULATE') || md5_file($filename) == $this->release['md5']) {
+      return $this->unpack($filename);
     }
 
-    return $this->unpack($filename);
+    // Cleanup on failure.
+    drush_op('unlink', $filename);
+    drush_set_error("Error: File $filename is corrupt (wrong md5 checksum).");
+    return;
   }
 
   protected function getBestRelease($major) {

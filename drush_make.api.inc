@@ -19,27 +19,6 @@ class DrushMakeProject {
     $this->path = $this->generatePath();
   }
 
-  public static function factory($project) {
-    $project += array(
-      'version' => DRUSH_MAKE_VERSION_BEST,
-      'location' => DRUSH_MAKE_UPDATE_DEFAULT_URL,
-      'subdir' => '',
-      'directory_name' => '',
-    );
-    if (empty($project['type'])) {
-      if (!($data = self::downloadData($project))) {
-        return FALSE;
-      }
-      $project += $data;
-    }
-    if (!empty($project['type'])) {
-      include_once 'drush_make.project.' . $project['type'] . '.inc';
-      $class = 'DrushMakeProject_' . $project['type'];
-      return new $class($project);
-    }
-    return FALSE;
-  }
-
   /**
    * Build a project.
    */
@@ -122,25 +101,6 @@ class DrushMakeProject {
       $current_path = implode('/', $built_path);
       if (!is_dir($current_path)) {
         drush_op('mkdir', $current_path);
-      }
-    }
-  }
-
-  protected static function downloadData($project) {
-    // First, get the release history.
-    @$release_history = simplexml_load_file($project['location'] . '/' . $project['name'] . '/' . $project['core']);
-    if (!$release_history) {
-      drush_set_error(dt("Could not retrieve version information for @project.", array('@project' => $project['name'])));
-      return;
-    }
-
-    // Determine the project type.
-    $term_map = array('Modules' => 'module', 'Themes' => 'theme', 'Drupal project' => 'core', 'Installation profiles' => 'profile');
-    // Iterate through all terms related to this project.
-    foreach ($release_history->terms->term as $term) {
-      // If the term is eather 'Modules' or 'Themes', add it.
-      if (in_array((string) $term->value, array_keys($term_map))) {
-        return array('release_history' => $release_history, 'type' => $term_map[(string)$term->value]);
       }
     }
   }

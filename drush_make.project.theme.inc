@@ -2,8 +2,8 @@
 // $Id$
 
 class DrushMakeProject_Theme extends DrushMakeProject {
-  var $project_path = 'sites/all/themes';
-  public function __construct(&$project) {
+  public function __construct(&$project, $build_path) {
+    $this->project_path = $build_path .'/themes';
     parent::__construct($project);
   }
 }

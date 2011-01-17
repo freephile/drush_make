@@ -2,6 +2,15 @@
 // $Id$
 
 function drush_make_download_factory($name, $download, $download_location) {
+  // create a check for multiple downloads of the same type
+  static $seen;
+  $seen[$name][] = $download['type'];
+  if (count($seen[$name]) > 1 {
+    drush_log(dt('Attempt to download project %name more than once (%types) prevented',
+      array('%name' => $name, '%types' => join(", ", $seen[$name]))), 'warning');
+    return FALSE;
+  }
+
   $function = 'drush_make_download_' . $download['type'];
   if (function_exists($function)) {
     return $function($name, $download, $download_location);

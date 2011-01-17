@@ -43,16 +43,19 @@ class DrushMakeProject {
   }
 
   function findDownloadLocation() {
+    // setup a way to track where we've already been
+    static $seen;
     $this->path = $this->generatePath();
     $this->project_directory = !empty($this->directory_name) ? $this->directory_name : $this->name;
     $this->download_location = $this->path . '/' . $this->project_directory;
-    // This directory shouldn't exist yet -- if it does, stop.
+    // This directory shouldn't exist yet -- unless a recursively called makefile
+    // re-defines or duplicates a dependency -- in which case we continue and log a warning.
     if (is_dir($this->download_location)) {
-      drush_set_error(dt('Directory not empty: %directory', array('%directory' => $this->download_location)));
-      return FALSE;
+      drush_log(dt('Directory not empty: %directory', array('%directory' => $this->download_location)), "warning");
     }
     else {
       drush_make_mkdir($this->download_location);
+      $seen[$this->download_location] = TRUE;
     }
     return $this->download_location;
   }
